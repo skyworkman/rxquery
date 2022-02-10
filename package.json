@@ -1,0 +1,22 @@
+{
+  "name": "rxquery",
+  "version": "1.0.0",
+  "description": "一个简单的基于 rxjs 的查询工具",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skyworkman/rxquery.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/skyworkman/rxquery/issues"
+  },
+  "homepage": "https://github.com/skyworkman/rxquery#readme",
+  "dependencies": {
+    "rxjs": "~6.6.0"
+  }
+}
