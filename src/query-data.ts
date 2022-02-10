@@ -3,39 +3,32 @@ import {
   catchError,
   debounceTime,
   delay,
-  mergeMap,
   repeat,
   retry,
+  startWith,
   switchMap,
   takeUntil,
   tap
 } from "rxjs/operators"
+
 type Data<T> = {
   pageIndex: number
   pageSize: number
   searchText?: string
 } & T
 
-type Test<T extends {}> = {
-  [key in keyof T]: string
-}
-// interface Test<T extends {}> {
-//   [key in keyof T] : string
-// }
-interface LooseObject<T> {
-  [key: string]: any
-}
-
 export class QueryData<QueryParam extends {}, QueryResult> {
+  // private
   private readonly p: Data<QueryParam>
-  loading: boolean = false
   private readonly pageIndexSource = new BehaviorSubject<number>(1)
   private readonly dataSource = new Subject<QueryResult>()
   private destroy$ = new Subject()
   private interval: Subscription | undefined = undefined
   private started = false
-  data: QueryResult
 
+  // public
+  loading: boolean = false
+  data: QueryResult
   parameter: Readonly<Data<QueryParam>>
 
   static parameters<T>(v: T): T {
@@ -59,47 +52,54 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     this.parameter = this.p
   }
 
-  private getData(pageIndex: number) {
-    this.pageIndexSource.next(pageIndex)
-  }
-
+  /**
+   * 监听结果变化
+   */
   dataChange(): Observable<QueryResult> {
     return this.dataSource
   }
 
+  /**
+   * 启用轮询刷新数据
+   * @param time 间隔时间
+   */
   enableInterval(time: number) {
     if (this.interval != null) {
       return
     }
-    this.interval = this.pageIndexSource
+    this.interval = this.dataSource
       .pipe(
-        mergeMap(it => this.dataSource),
+        delay(time),
+        startWith(undefined),
         takeUntil(this.destroy$),
         retry(),
-        delay(time),
+        tap(() => this.refresh()),
         repeat()
       )
       .subscribe()
   }
 
+  /**
+   * 停止轮询刷新
+   */
   stopInterval() {
     if (this.interval) {
       this.interval.unsubscribe()
     }
   }
 
-  start() {
+  start(debounce: number = 500) {
     if (this.started) {
       return
     }
+    this.started = true
     // 引入订阅机制, 主要是为了方便是用rxjs的一些操作符, 例如节流等
     this.pageIndexSource
       .pipe(
         takeUntil(this.destroy$),
         tap(_ => (this.loading = true)),
-        debounceTime(500),
+        debounceTime(debounce),
         switchMap(_ => {
-          // this.q.offset = (this.q.pageIndex - 1) * this.q.pageSize
           return this.fetchSource(this.p)
         }),
         catchError(error => {
@@ -109,7 +109,7 @@ export class QueryData<QueryParam extends {}, QueryResult> {
       )
       .subscribe(it => {
         this.loading = false
-        this.data = it != null ? it!! : this.defaultResult
+        this.data = it != null ? it : this.defaultResult
         this.dataSource.next(this.data)
         return this.data
       })
@@ -117,18 +117,16 @@ export class QueryData<QueryParam extends {}, QueryResult> {
 
   close() {
     this.destroy$.next()
-  }
-
-  get<KEY extends keyof Data<QueryParam>>(key: KEY): Data<QueryParam>[KEY] {
-    return this.p[key]
+    this.started = false
   }
 
   research() {
-    this.getData(1)
+    this.p.pageIndex = 1
+    this.refresh()
   }
 
   refresh() {
-    this.getData(this.pageIndexSource.value)
+    this.pageIndexSource.next(this.p.pageIndex)
   }
 
   update(data: QueryResult) {
@@ -136,10 +134,23 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     this.dataSource.next(this.data)
   }
 
-  search<KEY extends keyof Data<QueryParam>>(key: KEY, v: Data<QueryParam>[KEY], research: boolean = true) {
+  /**
+   * 设置查询参数, 但不进行查询,
+   * ps: set完毕后, 可以调用 `refresh` 进行查询
+   */
+  set<KEY extends keyof Data<QueryParam>>(key: KEY, v: Data<QueryParam>[KEY]) {
     this.p[key] = v
-    if (research) {
-      this.getData(1)
+    // 当更改了其他它查询参数的时候, 返回到第一页, 重新查询
+    if (key !== "pageIndex") {
+      this.p.pageIndex = 1
     }
+  }
+
+  /**
+   * 设置查询参数, 并立即进行查询
+   */
+  search<KEY extends keyof Data<QueryParam>>(key: KEY, v: Data<QueryParam>[KEY]) {
+    this.set(key, v)
+    this.refresh()
   }
 }
