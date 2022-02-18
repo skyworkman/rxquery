@@ -1,27 +1,40 @@
 import { BehaviorSubject, Observable, of, Subject, Subscription } from "rxjs"
-import {
-  catchError,
-  debounceTime,
-  delay,
-  repeat,
-  retry,
-  startWith,
-  switchMap,
-  takeUntil,
-  tap
-} from "rxjs/operators"
+import { catchError, debounceTime, delay, map, repeat, retry, shareReplay, startWith, switchMap, takeUntil, tap } from "rxjs/operators"
 
-type Data<T> = {
+export type Data<T> = {
   pageIndex: number
   pageSize: number
   searchText?: string
 } & T
+type Action = "interval" | "refresh" | "set"
+
+export interface QueryDataConfig<QueryParam, QueryResult> {
+  defaultResult: QueryResult
+  defaultParameters: QueryParam
+  debounceTime?: number
+  pageIndexOffset?: number
+}
+class QueryDataConfigProvider {
+  /**
+   * 接口上的坐标，相对于界面的坐标偏移多少，例如api要求pageIndex从0开始， 界面表格要求pageIndex在1开始
+   * 请求接口时，页码默认偏移 0 位
+   * @see pageIndexBegin
+   */
+  pageIndexOffset: number = 0
+  /**
+   * 页码默认从 1 开始
+   * 暂时不提供改变，因为页码一般都是从1开始
+   * @private
+   */
+  pageIndexBegin: number = 1
+  debounceTime: number = 300
+}
+export const defaultQueryDataConfig = new QueryDataConfigProvider()
 
 export class QueryData<QueryParam extends {}, QueryResult> {
   // private
   private readonly p: Data<QueryParam>
-  private readonly pageIndexSource = new BehaviorSubject<number>(1)
-  private readonly dataSource = new Subject<QueryResult>()
+  private readonly searchTrigger = new BehaviorSubject<Action>("refresh") // pageIndexSource
   private destroy$ = new Subject()
   private interval: Subscription | undefined = undefined
   private started = false
@@ -29,34 +42,79 @@ export class QueryData<QueryParam extends {}, QueryResult> {
   // public
   loading: boolean = false
   data: QueryResult
-  parameter: Readonly<Data<QueryParam>>
 
-  static parameters<T>(v: T): T {
-    return v
+  /**
+   * 不能直接更改查询参数，只能引用，更改查询参数请看以下函数：
+   * @see search
+   */
+  get parameter(): Readonly<Data<QueryParam>> {
+    return this.p
   }
 
-  static create<QueryResult>(
-    fetchSource: (q: Data<{}>) => Observable<QueryResult | null | undefined>,
-    defaultResult: QueryResult
-  ) {
-    return new QueryData(fetchSource, defaultResult, {})
+  private readonly dataObservable: Observable<QueryResult>
+
+  private get lastTrigger(): Action {
+    return this.searchTrigger.value
   }
+  /**
+   * 接口上的坐标，相对于界面的坐标偏移多少，例如api要求pageIndex从0开始， 界面表格要求pageIndex在1开始
+   * 请求接口时，页码默认偏移 0 位
+   * @see pageIndexBegin
+   */
+  private readonly pageIndexOffset: number
+  /**
+   * 页码默认从 1 开始
+   * 暂时不提供改变，因为页码一般都是从1开始
+   * @private
+   */
+  private readonly pageIndexBegin: number = defaultQueryDataConfig.pageIndexBegin
+  private readonly defaultResult: QueryResult
+  private readonly debounceTime: number
 
   constructor(
     private fetchSource: (q: Data<QueryParam>) => Observable<QueryResult | null | undefined>,
-    private defaultResult: QueryResult,
-    defaultValue: QueryParam
+    config: QueryDataConfig<QueryParam, QueryResult>
   ) {
-    this.p = { pageIndex: 0, pageSize: 10, ...defaultValue }
-    this.data = defaultResult
-    this.parameter = this.p
+    this.defaultResult = config.defaultResult
+    this.data = config.defaultResult
+    this.pageIndexOffset = config.pageIndexOffset ?? defaultQueryDataConfig.pageIndexOffset
+    this.p = { pageIndex: this.pageIndexBegin, pageSize: 10, ...config.defaultParameters }
+    this.debounceTime = config.debounceTime ?? defaultQueryDataConfig.debounceTime
+
+    // 引入订阅机制, 主要是为了方便是用rxjs的一些操作符, 例如节流等
+    this.dataObservable = this.searchTrigger.pipe(
+      takeUntil(this.destroy$),
+      tap(it => {
+        this.loading = it === "refresh"
+      }),
+      debounceTime(this.debounceTime),
+      switchMap(_ => {
+        return this.fetchSource({
+          ...this.p,
+          // 请求接口时的页码可能需要偏移
+          pageIndex: this.p.pageIndex + this.pageIndexOffset
+        })
+      }),
+      catchError(error => {
+        console.error(error)
+        return of(this.defaultResult)
+      }),
+      map(it => {
+        this.data = it != null ? it : this.defaultResult
+        return this.data
+      }),
+      tap(_ => {
+        this.loading = false
+      }),
+      shareReplay(1)
+    )
   }
 
   /**
    * 监听结果变化
    */
   dataChange(): Observable<QueryResult> {
-    return this.dataSource
+    return this.dataObservable
   }
 
   /**
@@ -67,13 +125,13 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     if (this.interval != null) {
       return
     }
-    this.interval = this.dataSource
+    this.interval = this.dataObservable
       .pipe(
         delay(time),
         startWith(undefined),
         takeUntil(this.destroy$),
         retry(),
-        tap(() => this.refresh()),
+        tap(() => this.searchTrigger.next("interval")),
         repeat()
       )
       .subscribe()
@@ -88,31 +146,12 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     }
   }
 
-  start(debounce: number = 500) {
+  subscribe() {
     if (this.started) {
       return
     }
     this.started = true
-    // 引入订阅机制, 主要是为了方便是用rxjs的一些操作符, 例如节流等
-    this.pageIndexSource
-      .pipe(
-        takeUntil(this.destroy$),
-        tap(_ => (this.loading = true)),
-        debounceTime(debounce),
-        switchMap(_ => {
-          return this.fetchSource(this.p)
-        }),
-        catchError(error => {
-          console.error(error)
-          return of(this.defaultResult)
-        })
-      )
-      .subscribe(it => {
-        this.loading = false
-        this.data = it != null ? it : this.defaultResult
-        this.dataSource.next(this.data)
-        return this.data
-      })
+    this.dataObservable.subscribe()
   }
 
   close() {
@@ -121,17 +160,12 @@ export class QueryData<QueryParam extends {}, QueryResult> {
   }
 
   research() {
-    this.p.pageIndex = 1
+    this.p.pageIndex = this.pageIndexBegin
     this.refresh()
   }
 
   refresh() {
-    this.pageIndexSource.next(this.p.pageIndex)
-  }
-
-  update(data: QueryResult) {
-    this.data = data
-    this.dataSource.next(this.data)
+    this.searchTrigger.next("refresh")
   }
 
   /**
@@ -142,7 +176,7 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     this.p[key] = v
     // 当更改了其他它查询参数的时候, 返回到第一页, 重新查询
     if (key !== "pageIndex") {
-      this.p.pageIndex = 1
+      this.p.pageIndex = this.pageIndexBegin
     }
   }
 
