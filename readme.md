@@ -1,5 +1,11 @@
-## 一个基于 rxjs 简单的查询工具
+# 一个基于 rxjs 简单的查询工具
 
+## 安装
+```bash
+npm install @skywosafe/rxquery
+```
+
+## 示例
 ### Angular 组件使用示例
 
 ```html
