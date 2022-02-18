@@ -1,6 +1,6 @@
 {
   "name": "@skywosafe/rxquery",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "一个简单的基于 rxjs 的查询工具",
   "main": "dist/cjs/index.js",
   "module": "dist/es/index.js",

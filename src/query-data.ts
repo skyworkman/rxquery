@@ -1,5 +1,17 @@
 import { BehaviorSubject, Observable, of, Subject, Subscription } from "rxjs"
-import { catchError, debounceTime, delay, map, repeat, retry, shareReplay, startWith, switchMap, takeUntil, tap } from "rxjs/operators"
+import {
+  catchError,
+  debounceTime,
+  delay,
+  map,
+  repeat,
+  retry,
+  shareReplay,
+  startWith,
+  switchMap,
+  takeUntil,
+  tap
+} from "rxjs/operators"
 
 export type Data<T> = {
   pageIndex: number
@@ -96,7 +108,6 @@ export class QueryData<QueryParam extends {}, QueryResult> {
         })
       }),
       catchError(error => {
-        console.error(error)
         return of(this.defaultResult)
       }),
       map(it => {
@@ -127,11 +138,13 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     }
     this.interval = this.dataObservable
       .pipe(
-        delay(time),
         startWith(undefined),
+        delay(time),
         takeUntil(this.destroy$),
         retry(),
-        tap(() => this.searchTrigger.next("interval")),
+        tap(() => {
+          this.searchTrigger.next("interval")
+        }),
         repeat()
       )
       .subscribe()
