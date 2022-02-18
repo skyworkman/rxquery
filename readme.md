@@ -10,10 +10,10 @@
   [ngModel]="q.parameter.searchText"
   (ngModelChange)="q.search('searchText', $event)"
 />
-<button (click)="searchOnlyEnable()">只显示启用状态数据</button>
+<button (click)="searchForOnlyEnabled()">只显示启用状态数据</button>
 
 <!-- list -->
-<div *ngFor="let item of q.data">{{ item.name }}</div>
+<div *ngFor="let item of q.data.items">{{ item.name }}</div>
 ```
 
 ```ts
@@ -25,21 +25,23 @@ export class UsersComponent implements OnInit, OnDestroy {
       // return http.getUsers("1") // error
       return this.userService.getUsers(p.state) // right
     },
-    { total: 0, items: [] },
-    QueryData.parameters<{ state?: State }>({})
+    {
+     defaultResult: { total: 0, items: [] },
+     defaultParameters: <{ state?: State }>{ state: undefined }
+    }
   )
 
   constructor(private userService: AgentsQueryService) {}
 
   ngOnInit() {
     // 必须: 开始查询
-    this.q.start()
+    this.q.subscribe()
 
     // 可选: 每3秒刷新数据
     // this.q.enableInterval(3000)
   }
 
-  searchOnlyEnable() {
+  searchForOnlyEnabled() {
     this.q.search("state", "enable")
   }
 
