@@ -1,5 +1,5 @@
 # 一个基于 rxjs 简单的查询工具
-
+[![npm version](https://badge.fury.io/js/@skywosafe%2Frxquery.svg)](https://badge.fury.io/js/@skywosafe%2Frxquery)
 ## 安装
 
 ```bash
