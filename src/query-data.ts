@@ -20,6 +20,10 @@ export type Data<T> = {
 } & T
 type Action = "interval" | "refresh" | "set"
 
+export type QueryDataFetchSource<QueryParameters, QueryResult> = (
+  p: Data<QueryParameters>
+) => Observable<QueryResult | null | undefined>
+
 export interface QueryDataConfig<QueryParam, QueryResult> {
   defaultResult: QueryResult
   defaultParameters: QueryParam
@@ -44,6 +48,32 @@ class QueryDataConfigProvider {
 export const defaultQueryDataConfig = new QueryDataConfigProvider()
 
 export class QueryData<QueryParam extends {}, QueryResult> {
+  // static
+  static parameters<QueryParameters>(t: QueryParameters): QueryParameters {
+    return t
+  }
+
+  static createDefault<R>(
+    fetchSource: (p: Data<{}>) => Observable<R | null | undefined>,
+    defaultResult: R
+  ): QueryData<{}, R> {
+    return new QueryData(fetchSource, {
+      defaultParameters: {},
+      defaultResult: defaultResult
+    })
+  }
+
+  static create<Q, R>(
+    parameters: Q,
+    fetchSource: (p: Data<Q>) => Observable<R | null | undefined>,
+    defaultResult: R
+  ): QueryData<Q, R> {
+    return new QueryData(fetchSource, {
+      defaultParameters: parameters,
+      defaultResult: defaultResult
+    })
+  }
+
   // private
   private readonly p: Data<QueryParam>
   private readonly searchTrigger = new BehaviorSubject<Action>("refresh") // pageIndexSource
@@ -74,6 +104,7 @@ export class QueryData<QueryParam extends {}, QueryResult> {
    * @see pageIndexBegin
    */
   private readonly pageIndexOffset: number
+  private readonly triggers: Subscription[] = []
   /**
    * 页码默认从 1 开始
    * 暂时不提供改变，因为页码一般都是从1开始
@@ -105,10 +136,11 @@ export class QueryData<QueryParam extends {}, QueryResult> {
           ...this.p,
           // 请求接口时的页码可能需要偏移
           pageIndex: this.p.pageIndex + this.pageIndexOffset
-        })
-      }),
-      catchError(error => {
-        return of(this.defaultResult)
+        }).pipe(
+          catchError(error => {
+            return of(this.defaultResult)
+          })
+        )
       }),
       map(it => {
         this.data = it != null ? it : this.defaultResult
@@ -126,6 +158,18 @@ export class QueryData<QueryParam extends {}, QueryResult> {
    */
   dataChange(): Observable<QueryResult> {
     return this.dataObservable
+  }
+
+  registryTrigger<T>(trigger: Observable<T>, p: (p: T) => void): number {
+    const index = this.triggers.length
+    const subscription = trigger.pipe(takeUntil(this.destroy$)).subscribe(p)
+    this.triggers.push(subscription)
+    return index
+  }
+
+  removeTrigger(index: number) {
+    this.triggers[index]?.unsubscribe()
+    // TODO: 暂时不移除
   }
 
   /**
