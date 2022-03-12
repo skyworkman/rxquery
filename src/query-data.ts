@@ -18,7 +18,10 @@ export type Data<T> = {
   pageSize: number
   searchText?: string
 } & T
-type Action = "interval" | "refresh" | "set"
+type Action<R> =
+  | { type: "interval" }
+  | { type: "fetch" }
+  | { type: "update"; action: Observable<R | null | undefined> }
 
 export type QueryDataFetchSource<QueryParameters, QueryResult> = (
   p: Data<QueryParameters>
@@ -76,13 +79,19 @@ export class QueryData<QueryParam extends {}, QueryResult> {
 
   // private
   private readonly p: Data<QueryParam>
-  private readonly searchTrigger = new BehaviorSubject<Action>("refresh") // pageIndexSource
+  private readonly dataTrigger = new BehaviorSubject<Action<QueryResult>>({ type: "fetch" }) // pageIndexSource
   private destroy$ = new Subject()
   private interval: Subscription | undefined = undefined
   private started = false
 
   // public
-  loading: boolean = false
+  get loading(): boolean {
+    return this.fetching || this.updating
+  }
+
+  private fetching: boolean = false
+  private updating: boolean = false
+
   data: QueryResult
 
   /**
@@ -95,9 +104,6 @@ export class QueryData<QueryParam extends {}, QueryResult> {
 
   private readonly dataObservable: Observable<QueryResult>
 
-  private get lastTrigger(): Action {
-    return this.searchTrigger.value
-  }
   /**
    * 接口上的坐标，相对于界面的坐标偏移多少，例如api要求pageIndex从0开始， 界面表格要求pageIndex在1开始
    * 请求接口时，页码默认偏移 0 位
@@ -125,34 +131,50 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     this.debounceTime = config.debounceTime ?? defaultQueryDataConfig.debounceTime
 
     // 引入订阅机制, 主要是为了方便是用rxjs的一些操作符, 例如节流等
-    this.dataObservable = this.searchTrigger.pipe(
+    this.dataObservable = this.dataTrigger.pipe(
       takeUntil(this.destroy$),
       tap(it => {
-        this.loading = it === "refresh"
+        if (it.type === "fetch") {
+          this.fetching = true
+        } else if (it.type === "update") {
+          this.updating = true
+        }
       }),
       debounceTime(this.debounceTime),
-      switchMap(_ => {
-        return this.fetchSource({
-          ...this.p,
-          // 请求接口时的页码可能需要偏移
-          pageIndex: this.p.pageIndex + this.pageIndexOffset
-        }).pipe(
+      switchMap(it => {
+        if (it.type === "update") {
+          return it.action.pipe(
+            catchError(it => {
+              return of(this.data)
+            })
+          )
+        }
+        return this.fetchData().pipe(
           catchError(error => {
             return of(this.defaultResult)
           })
         )
       }),
+      catchError(error => of(this.defaultResult)),
       map(it => {
         this.data = it != null ? it : this.defaultResult
         return this.data
       }),
       tap(_ => {
-        this.loading = false
+        this.fetching = false
+        this.updating = false
       }),
       shareReplay(1)
     )
   }
 
+  private fetchData() {
+    return this.fetchSource({
+      ...this.p,
+      // 请求接口时的页码可能需要偏移
+      pageIndex: this.p.pageIndex + this.pageIndexOffset
+    })
+  }
   /**
    * 监听结果变化
    */
@@ -187,7 +209,7 @@ export class QueryData<QueryParam extends {}, QueryResult> {
         takeUntil(this.destroy$),
         retry(),
         tap(() => {
-          this.searchTrigger.next("interval")
+          this.dataTrigger.next({ type: "interval" })
         }),
         repeat()
       )
@@ -222,7 +244,7 @@ export class QueryData<QueryParam extends {}, QueryResult> {
   }
 
   refresh() {
-    this.searchTrigger.next("refresh")
+    this.dataTrigger.next({ type: "fetch" })
   }
 
   /**
@@ -235,6 +257,41 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     if (key !== "pageIndex") {
       this.p.pageIndex = this.pageIndexBegin
     }
+  }
+
+  changeData(updater: (data: QueryResult) => QueryResult) {
+    this.dataTrigger.next({ type: "update", action: of(updater(this.data)) })
+  }
+
+  /**
+   * 更新, 更新成功后, 按照指定方法, 更新数据
+   */
+  update<T extends NonNullable<any>>(
+    action: Observable<T | null | undefined>,
+    success?: (p: T) => void | "research" | ((data: QueryResult, p: T) => QueryResult)
+  ): void {
+    this.dataTrigger.next({
+      type: "update",
+      action: action.pipe(
+        switchMap(it => {
+          if (it == null) {
+            // 更新调用失败, 不做任何改变
+            return of(this.data)
+          }
+          const updater = success == null ? undefined : success(it)
+          if (updater == null || typeof updater === "string") {
+            // 未指定更新方法
+            if (updater === "research") {
+              this.research()
+            }
+            return this.fetchData()
+          } else {
+            // 指定了更新方法
+            return of(updater(this.data, it))
+          }
+        })
+      )
+    })
   }
 
   /**
