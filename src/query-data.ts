@@ -4,10 +4,8 @@ import {
   debounceTime,
   delay,
   map,
-  repeat,
-  retry,
+  repeatWhen,
   shareReplay,
-  startWith,
   switchMap,
   takeUntil,
   tap
@@ -51,36 +49,13 @@ class QueryDataConfigProvider {
 export const defaultQueryDataConfig = new QueryDataConfigProvider()
 
 export class QueryData<QueryParam extends {}, QueryResult> {
-  // static
-  static parameters<QueryParameters>(t: QueryParameters): QueryParameters {
-    return t
-  }
-
-  static createDefault<R>(
-    fetchSource: (p: Data<{}>) => Observable<R | null | undefined>,
-    defaultResult: R
-  ): QueryData<{}, R> {
-    return new QueryData(fetchSource, {
-      defaultParameters: {},
-      defaultResult: defaultResult
-    })
-  }
-
-  static create<Q, R>(
-    parameters: Q,
-    fetchSource: (p: Data<Q>) => Observable<R | null | undefined>,
-    defaultResult: R
-  ): QueryData<Q, R> {
-    return new QueryData(fetchSource, {
-      defaultParameters: parameters,
-      defaultResult: defaultResult
-    })
-  }
-
   // private
   private readonly p: Data<QueryParam>
-  private readonly dataTrigger = new BehaviorSubject<Action<QueryResult>>({ type: "fetch" }) // pageIndexSource
+  // pageIndexSource
+  private readonly dataTrigger = new BehaviorSubject<Action<QueryResult>>({ type: "fetch" })
   private destroy$ = new Subject()
+  closed: Observable<unknown> = this.destroy$
+
   private interval: Subscription | undefined = undefined
   private started = false
 
@@ -132,7 +107,6 @@ export class QueryData<QueryParam extends {}, QueryResult> {
 
     // 引入订阅机制, 主要是为了方便是用rxjs的一些操作符, 例如节流等
     this.dataObservable = this.dataTrigger.pipe(
-      takeUntil(this.destroy$),
       tap(it => {
         if (it.type === "fetch") {
           this.fetching = true
@@ -164,8 +138,35 @@ export class QueryData<QueryParam extends {}, QueryResult> {
         this.fetching = false
         this.updating = false
       }),
-      shareReplay(1)
+      shareReplay(1),
+      takeUntil(this.destroy$)
     )
+  }
+
+  // static
+  static parameters<QueryParameters>(t: QueryParameters): QueryParameters {
+    return t
+  }
+
+  static createDefault<R>(
+    fetchSource: (p: Data<{}>) => Observable<R | null | undefined>,
+    defaultResult: R
+  ): QueryData<{}, R> {
+    return new QueryData(fetchSource, {
+      defaultParameters: {},
+      defaultResult
+    })
+  }
+
+  static create<Q extends {}, R>(
+    parameters: Q,
+    fetchSource: (p: Data<Q>) => Observable<R | null | undefined>,
+    defaultResult: R
+  ): QueryData<Q, R> {
+    return new QueryData(fetchSource, {
+      defaultParameters: parameters,
+      defaultResult
+    })
   }
 
   private fetchData() {
@@ -182,18 +183,6 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     return this.dataObservable
   }
 
-  registryTrigger<T>(trigger: Observable<T>, p: (p: T) => void): number {
-    const index = this.triggers.length
-    const subscription = trigger.pipe(takeUntil(this.destroy$)).subscribe(p)
-    this.triggers.push(subscription)
-    return index
-  }
-
-  removeTrigger(index: number) {
-    this.triggers[index]?.unsubscribe()
-    // TODO: 暂时不移除
-  }
-
   /**
    * 启用轮询刷新数据
    * @param time 间隔时间
@@ -202,16 +191,13 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     if (this.interval != null) {
       return
     }
-    this.interval = this.dataObservable
+    this.interval = of(undefined)
       .pipe(
-        startWith(undefined),
-        delay(time),
         takeUntil(this.destroy$),
-        retry(),
+        repeatWhen(it => this.dataObservable.pipe(delay(time))),
         tap(() => {
           this.dataTrigger.next({ type: "interval" })
-        }),
-        repeat()
+        })
       )
       .subscribe()
   }
