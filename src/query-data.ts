@@ -3,6 +3,7 @@ import {
   catchError,
   debounceTime,
   delay,
+  filter,
   map,
   repeatWhen,
   shareReplay,
@@ -107,12 +108,20 @@ export class QueryData<QueryParam extends {}, QueryResult> {
 
     // 引入订阅机制, 主要是为了方便是用rxjs的一些操作符, 例如节流等
     this.dataObservable = this.dataTrigger.pipe(
-      tap(it => {
+      takeUntil(this.destroy$),
+      filter(it => {
         if (it.type === "fetch") {
+          if (this.fetching) {
+            return false
+          }
           this.fetching = true
         } else if (it.type === "update") {
+          if (this.updating) {
+            return false
+          }
           this.updating = true
         }
+        return true
       }),
       debounceTime(this.debounceTime),
       switchMap(it => {
@@ -138,14 +147,8 @@ export class QueryData<QueryParam extends {}, QueryResult> {
         this.fetching = false
         this.updating = false
       }),
-      shareReplay(1),
-      takeUntil(this.destroy$)
+      shareReplay(1)
     )
-  }
-
-  // static
-  static parameters<QueryParameters>(t: QueryParameters): QueryParameters {
-    return t
   }
 
   static createDefault<R>(
@@ -158,13 +161,25 @@ export class QueryData<QueryParam extends {}, QueryResult> {
     })
   }
 
-  static create<Q extends {}, R>(
-    parameters: Q,
-    fetchSource: (p: Data<Q>) => Observable<R | null | undefined>,
+  static parameter<Q>(parameters: Q) {
+    return {
+      create: <R>(
+        fetchSource: (p: Data<Q>) => Observable<R | null | undefined>,
+        defaultResult: R
+      ): QueryData<Q, R> => {
+        return new QueryData(fetchSource, {
+          defaultParameters: parameters,
+          defaultResult
+        })
+      }
+    }
+  }
+  static create<R>(
+    fetchSource: (p: Data<{}>) => Observable<R | null | undefined>,
     defaultResult: R
-  ): QueryData<Q, R> {
+  ): QueryData<{}, R> {
     return new QueryData(fetchSource, {
-      defaultParameters: parameters,
+      defaultParameters: {},
       defaultResult
     })
   }
